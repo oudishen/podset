@@ -1,0 +1,7 @@
+version: "2"
+domain: oudishen.net
+repo: oudishen.net/podset
+resources:
+- group: sample
+  version: v1alpha1
+  kind: PodSet
