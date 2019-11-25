@@ -74,7 +74,7 @@ func (r *PodSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	logger.Info("", "Update Status.AvailableReplicas to ", replicas)
 	instance.Status.AvailableReplicas = replicas
-	if err := r.Update(context.TODO(), instance); err != nil {
+	if err := r.Status().Update(context.TODO(), instance); err != nil {
 		logger.Info("", "Failed to update Status.AvailableReplicas to ", replicas)
 		return reconcile.Result{}, errors.Wrap(err, "r.Status().Update")
 	}
@@ -104,6 +104,9 @@ func (r *PodSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	if n < 0 {
 		for i := 0; i < -n; i++ {
 			pod := pods.Items[i].DeepCopy()
+			if pod.DeletionTimestamp != nil {
+				continue
+			}
 			logger.Info("Deleting a Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
 			err = r.Delete(context.TODO(), pod)
 			if err != nil {
