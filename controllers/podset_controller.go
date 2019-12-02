@@ -33,6 +33,17 @@ import (
 	"oudishen.net/podset/api/v1alpha1"
 )
 
+const (
+	PodSetFinalizer = "podset.sample.oudishen.net"
+)
+
+func (r *PodSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.PodSet{}).
+		Owns(&corev1.Pod{}).
+		Complete(r)
+}
+
 // PodSetReconciler reconciles a PodSet object
 type PodSetReconciler struct {
 	client.Client
@@ -48,8 +59,8 @@ func (r *PodSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	logger.Info("Reconciling")
 
 	// Fetch the PodSet instance
-	instance := &v1alpha1.PodSet{}
-	err := r.Get(context.TODO(), req.NamespacedName, instance)
+	podSet := &v1alpha1.PodSet{}
+	err := r.Get(context.TODO(), req.NamespacedName, podSet)
 	if err != nil {
 		if apierr.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
@@ -67,33 +78,104 @@ func (r *PodSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		pods,
 		client.InNamespace(req.Namespace),
 		&client.MatchingLabels{
-			"app": req.Name,
+			"podset": req.Name,
 		},
 	)
-	replicas := int32(len(pods.Items))
 
-	logger.Info("", "Update Status.AvailableReplicas to ", replicas)
-	instance.Status.AvailableReplicas = replicas
-	if err := r.Status().Update(context.TODO(), instance); err != nil {
-		logger.Info("", "Failed to update Status.AvailableReplicas to ", replicas)
-		return reconcile.Result{}, errors.Wrap(err, "r.Status().Update")
+	scope := &PosSetScope{
+		Client: r.Client,
+		ctx:    context.TODO(),
+		logger: logger.WithName("PodSetScope"),
+		scheme: r.Scheme,
+		podSet: podSet,
+		pods:   pods,
 	}
 
-	n := int(instance.Spec.Replicas - replicas)
+	defer func() {
+		if err := scope.Close(); err != nil {
+			logger.Info("scope.Close error: " + err.Error())
+		}
+	}()
+
+	// Handle deleted clusters
+	if !podSet.DeletionTimestamp.IsZero() {
+		return scope.ReconcileDelete()
+	}
+
+	// Handle non-deleted clusters
+	return scope.ReconcileNormal()
+}
+
+type PosSetScope struct {
+	client.Client
+	ctx    context.Context
+	logger logr.Logger
+	scheme *runtime.Scheme
+	podSet *v1alpha1.PodSet
+	pods   *corev1.PodList
+}
+
+func (s *PosSetScope) Close() error {
+	if err := s.Client.Update(context.TODO(), s.podSet); err != nil {
+		return errors.Wrap(err, "s.client.Update")
+	}
+	if len(s.podSet.Finalizers) == 0 {
+		return nil
+	}
+	if err := s.Client.Status().Update(context.TODO(), s.podSet); err != nil {
+		return errors.Wrap(err, "s.Client.Status().Update")
+	}
+	return nil
+}
+
+func (s *PosSetScope) ReconcileDelete() (reconcile.Result, error) {
+	s.logger.Info("ReconcileDelete")
+
+	if len(s.pods.Items) == 0 {
+		controllerutil.RemoveFinalizer(s.podSet, PodSetFinalizer)
+		return reconcile.Result{}, nil
+	}
+
+	for _, pod := range s.pods.Items {
+		if pod.DeletionTimestamp != nil {
+			continue
+		}
+		s.logger.Info("Deleting a Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
+		if err := s.Delete(context.TODO(), pod.DeepCopy()); err != nil {
+			if !apierr.IsNotFound(err) {
+				return reconcile.Result{}, errors.Wrap(err, "r.Delete pod")
+			}
+		}
+	}
+
+	return reconcile.Result{}, nil
+}
+
+func (s *PosSetScope) ReconcileNormal() (reconcile.Result, error) {
+	controllerutil.AddFinalizer(s.podSet, PodSetFinalizer)
+
+	replicas := int32(len(s.pods.Items))
+	s.podSet.Status.AvailableReplicas = replicas
+	s.logger.Info("", "Update Status.AvailableReplicas to ", replicas)
+	if err := s.Status().Update(context.TODO(), s.podSet); err != nil {
+		s.logger.Info("", "Failed to update Status.AvailableReplicas to ", replicas)
+		return reconcile.Result{}, errors.Wrap(err, "s.Status().Update")
+	}
+
+	n := int(s.podSet.Spec.Replicas - replicas)
 	if n > 0 {
 		for i := 0; i < n; i++ {
 			// Define a new Pod object
-			pod := newPodForCR(instance)
+			pod := newPodForCR(s.podSet)
 
 			// Set PodSet instance as the owner and controller
-			if err := controllerutil.SetControllerReference(instance, pod, r.Scheme); err != nil {
+			if err := controllerutil.SetControllerReference(s.podSet, pod, s.scheme); err != nil {
 				return reconcile.Result{}, errors.Wrap(err, "controllerutil.SetControllerReference")
 			}
 
-			logger.Info("Creating a Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
-			err = r.Create(context.TODO(), pod)
-			if err != nil {
-				return reconcile.Result{}, errors.Wrap(err, "r.Create pod")
+			s.logger.Info("Creating a Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
+			if err := s.Create(context.TODO(), pod); err != nil {
+				return reconcile.Result{}, errors.Wrap(err, "s.Create pod")
 			}
 		}
 
@@ -103,14 +185,16 @@ func (r *PodSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	if n < 0 {
 		for i := 0; i < -n; i++ {
-			pod := pods.Items[i].DeepCopy()
+			pod := s.pods.Items[i].DeepCopy()
 			if pod.DeletionTimestamp != nil {
 				continue
 			}
-			logger.Info("Deleting a Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
-			err = r.Delete(context.TODO(), pod)
-			if err != nil {
-				return reconcile.Result{}, errors.Wrap(err, "r.Delete pod")
+
+			s.logger.Info("Deleting a Pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
+			if err := s.Delete(context.TODO(), pod); err != nil {
+				if !apierr.IsNotFound(err) {
+					return reconcile.Result{}, errors.Wrap(err, "s.Delete pod")
+				}
 			}
 		}
 
@@ -119,14 +203,14 @@ func (r *PodSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	}
 
 	// Pod already exists - don't requeue
-	logger.Info("Skip reconcile: replicas already adjust")
+	s.logger.Info("Skip reconcile: replicas already adjust")
 	return reconcile.Result{}, nil
 }
 
 // newPodForCR returns a busybox pod with the same name/namespace as the cr
 func newPodForCR(cr *v1alpha1.PodSet) *corev1.Pod {
 	labels := map[string]string{
-		"app": cr.Name,
+		"podset": cr.Name,
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -144,11 +228,4 @@ func newPodForCR(cr *v1alpha1.PodSet) *corev1.Pod {
 			},
 		},
 	}
-}
-
-func (r *PodSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.PodSet{}).
-		Owns(&corev1.Pod{}).
-		Complete(r)
 }

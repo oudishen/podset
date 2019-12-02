@@ -54,7 +54,7 @@ func (in *PodSet) DeepCopyObject() runtime.Object {
 func (in *PodSetList) DeepCopyInto(out *PodSetList) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
-	out.ListMeta = in.ListMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
 	if in.Items != nil {
 		in, out := &in.Items, &out.Items
 		*out = make([]PodSet, len(*in))

@@ -1,5 +1,6 @@
-apiVersion: sample.oudishen.net/v1alpha1
+---
 kind: PodSet
+apiVersion: sample.oudishen.net/v1alpha1
 metadata:
   name: podset-sample
 spec:
