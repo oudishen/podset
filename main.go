@@ -62,7 +62,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr.GetEventRecorderFor("")
 	if err = (&controllers.PodSetReconciler{
 		Client:   mgr.GetClient(),
 		Log:      ctrl.Log.WithName("controllers").WithName("PodSet"),
