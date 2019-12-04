@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -47,8 +48,9 @@ func (r *PodSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // PodSetReconciler reconciles a PodSet object
 type PodSetReconciler struct {
 	client.Client
-	Log    logr.Logger
-	Scheme *runtime.Scheme
+	Log      logr.Logger
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=sample.oudishen.net,resources=podsets,verbs=get;list;watch;create;update;patch;delete
@@ -83,12 +85,13 @@ func (r *PodSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	)
 
 	scope := &PosSetScope{
-		Client: r.Client,
-		ctx:    context.TODO(),
-		logger: logger.WithName("PodSetScope"),
-		scheme: r.Scheme,
-		podSet: podSet,
-		pods:   pods,
+		Client:   r.Client,
+		ctx:      context.TODO(),
+		logger:   logger.WithName("PodSetScope"),
+		scheme:   r.Scheme,
+		podSet:   podSet,
+		pods:     pods,
+		recorder: r.Recorder,
 	}
 
 	defer func() {
@@ -108,11 +111,12 @@ func (r *PodSetReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 type PosSetScope struct {
 	client.Client
-	ctx    context.Context
-	logger logr.Logger
-	scheme *runtime.Scheme
-	podSet *v1alpha1.PodSet
-	pods   *corev1.PodList
+	ctx      context.Context
+	logger   logr.Logger
+	scheme   *runtime.Scheme
+	podSet   *v1alpha1.PodSet
+	pods     *corev1.PodList
+	recorder record.EventRecorder
 }
 
 func (s *PosSetScope) Close() error {
@@ -130,6 +134,7 @@ func (s *PosSetScope) Close() error {
 
 func (s *PosSetScope) ReconcileDelete() (reconcile.Result, error) {
 	s.logger.Info("ReconcileDelete")
+	s.recorder.Event(s.podSet, "Normal", "Delete", "Deleting")
 
 	if len(s.pods.Items) == 0 {
 		controllerutil.RemoveFinalizer(s.podSet, PodSetFinalizer)
@@ -156,6 +161,7 @@ func (s *PosSetScope) ReconcileNormal() (reconcile.Result, error) {
 
 	replicas := int32(len(s.pods.Items))
 	s.podSet.Status.AvailableReplicas = replicas
+	s.recorder.Eventf(s.podSet, "Normal", "Reconcile", "Set AvailableReplicas to %d", replicas)
 	s.logger.Info("", "Update Status.AvailableReplicas to ", replicas)
 	if err := s.Status().Update(context.TODO(), s.podSet); err != nil {
 		s.logger.Info("", "Failed to update Status.AvailableReplicas to ", replicas)
@@ -202,6 +208,7 @@ func (s *PosSetScope) ReconcileNormal() (reconcile.Result, error) {
 		return reconcile.Result{}, nil
 	}
 
+	s.recorder.Eventf(s.podSet, "Normal", "Reconcile", "Reconciled")
 	// Pod already exists - don't requeue
 	s.logger.Info("Skip reconcile: replicas already adjust")
 	return reconcile.Result{}, nil

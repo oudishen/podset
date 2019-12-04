@@ -62,10 +62,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	mgr.GetEventRecorderFor("")
 	if err = (&controllers.PodSetReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("PodSet"),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Log:      ctrl.Log.WithName("controllers").WithName("PodSet"),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("PodSet"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PodSet")
 		os.Exit(1)
