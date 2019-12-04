@@ -134,7 +134,7 @@ func (s *PosSetScope) Close() error {
 
 func (s *PosSetScope) ReconcileDelete() (reconcile.Result, error) {
 	s.logger.Info("ReconcileDelete")
-	s.recorder.Event(s.podSet, "Normal", "Delete", "Deleting")
+	s.recorder.Event(s.podSet, corev1.EventTypeNormal, "Delete", "Deleting")
 
 	if len(s.pods.Items) == 0 {
 		controllerutil.RemoveFinalizer(s.podSet, PodSetFinalizer)
@@ -161,7 +161,7 @@ func (s *PosSetScope) ReconcileNormal() (reconcile.Result, error) {
 
 	replicas := int32(len(s.pods.Items))
 	s.podSet.Status.AvailableReplicas = replicas
-	s.recorder.Eventf(s.podSet, "Normal", "Reconcile", "Set AvailableReplicas to %d", replicas)
+	s.recorder.Eventf(s.podSet, corev1.EventTypeNormal, "Reconcile", "Set AvailableReplicas to %d", replicas)
 	s.logger.Info("", "Update Status.AvailableReplicas to ", replicas)
 	if err := s.Status().Update(context.TODO(), s.podSet); err != nil {
 		s.logger.Info("", "Failed to update Status.AvailableReplicas to ", replicas)
@@ -208,7 +208,7 @@ func (s *PosSetScope) ReconcileNormal() (reconcile.Result, error) {
 		return reconcile.Result{}, nil
 	}
 
-	s.recorder.Eventf(s.podSet, "Normal", "Reconcile", "Reconciled")
+	s.recorder.Eventf(s.podSet, corev1.EventTypeNormal, "Reconcile", "Reconciled")
 	// Pod already exists - don't requeue
 	s.logger.Info("Skip reconcile: replicas already adjust")
 	return reconcile.Result{}, nil
